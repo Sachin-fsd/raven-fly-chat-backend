@@ -17,4 +17,4 @@ export const buildConversationChannel = (conversationId: string): string => `con
  * channels, which they only subscribe to for conversations already in
  * their inbox.
  */
-export const buildPersonalChannel = (userId: string): string => `personal#${userId}`;
+export const buildPersonalChannel = (userId: string): string => `personal:#${userId}`;

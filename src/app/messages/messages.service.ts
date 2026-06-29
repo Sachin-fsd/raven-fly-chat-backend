@@ -1,7 +1,7 @@
 import { getMessagesCollection } from './messages.schema';
 import { getConversationById } from '../conversations/conversations.service';
 import { getRabbitChannel } from '../../config/rabbitmq.config';
-import { publishToCentrifugo } from '../../config/centrifugo.config';
+import { publishToCentrifugo, isAnyoneSubscribedToChannel } from '../../config/centrifugo.config';
 import { getCurrentBucket } from '../../utils/bucket.util';
 import { env } from '../../config/env.config';
 import { logger } from '../../logger/logger';
@@ -16,15 +16,18 @@ interface SendMessageResult {
   text: string;
   senderId: string;
   createdAt: string;
+  status: 'sent' | 'delivered';
 }
 
 /**
  * Handles the "send message" flow:
  *  1. Validate the sender is a participant of the conversation.
  *  2. Compute the current bucket + a strictly increasing message_id.
- *  3. Publish to Centrifugo immediately for real-time delivery.
- *  4. Push the durable-write payload onto RabbitMQ (fire-and-forget).
- *  5. Return success to the caller without waiting on AstraDB.
+ *  3. Check whether the recipient is online (Centrifugo presence_stats on
+ *     their personal channel) to decide sent vs. delivered.
+ *  4. Publish to Centrifugo immediately for real-time delivery.
+ *  5. Push the durable-write payload onto RabbitMQ (fire-and-forget).
+ *  6. Return success to the caller without waiting on AstraDB.
  */
 export const sendMessage = async (
   conversationId: string,
@@ -40,6 +43,18 @@ export const sendMessage = async (
   const messageId = now.getTime();
 
   const channelName = buildConversationChannel(conversationId);
+  const senderName = conversation.participantsData[senderId]?.name ?? 'Someone';
+  const otherParticipants = conversation.participants.filter((id) => id !== senderId);
+
+  // MVP is 1:1 only, so there's exactly one "other" participant — that
+  // assumption is baked into using a single `delivered` flag on the
+  // `new_message` event below. Revisit this for groups (delivered would
+  // need to be per-recipient there).
+  const recipientId = otherParticipants[0];
+  const isRecipientOnline = recipientId
+  ? await isAnyoneSubscribedToChannel(buildPersonalChannel(recipientId))
+  : false;
+  console.log('\n\n\n',{recipientId, isRecipientOnline},'\n\n\n')
 
   // Step 1: Real-time delivery via Centrifugo — happens instantly, independent
   // of whether the durable write below has completed.
@@ -52,6 +67,7 @@ export const sendMessage = async (
       senderId,
       text,
       createdAt: now.toISOString(),
+      status: isRecipientOnline ? 'delivered' : 'sent',
     },
   });
 
@@ -62,9 +78,6 @@ export const sendMessage = async (
   // `conversation:<id>` channel yet (they only subscribe to those for
   // conversations already in their inbox). Without this, a first message
   // from a new contact would only ever show up after a manual refresh.
-  const senderName = conversation.participantsData[senderId]?.name ?? 'Someone';
-  const otherParticipants = conversation.participants.filter((id) => id !== senderId);
-
   await Promise.all(
     otherParticipants.map((participantId) =>
       publishToCentrifugo({
@@ -97,6 +110,7 @@ export const sendMessage = async (
     participants: conversation.participants,
     participantsData: conversation.participantsData,
     conversationType: conversation.type,
+    status: isRecipientOnline ? 'delivered' : 'sent',
   };
 
   const channel = getRabbitChannel();
@@ -106,7 +120,7 @@ export const sendMessage = async (
   });
 
   logger.info('messages.service.sendMessage: exit (queued for async persistence)', { conversationId, messageId });
-
+  console.log({text, isRecipientOnline})
   return {
     conversationId,
     messageId,
@@ -114,6 +128,7 @@ export const sendMessage = async (
     text,
     senderId,
     createdAt: now.toISOString(),
+    status: isRecipientOnline ? 'delivered' : 'sent',
   };
 };
 

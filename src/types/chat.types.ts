@@ -19,7 +19,8 @@ export interface ConversationDoc {
   createdAt: Date;
 }
 
-export interface MessageDoc {
+export interface MessageDoc {  /** Message delivery status – sent, delivered (recipient online), or read */
+  status?: 'sent' | 'delivered' | 'read';
   conversation_id: string;
   bucket: string;
   message_id: number;
@@ -67,4 +68,5 @@ export interface ChatMessageQueuePayload {
   participants: string[];
   participantsData: Record<string, ParticipantInfo>;
   conversationType: ConversationType;
+  status: 'sent' | 'delivered' | 'read';
 }

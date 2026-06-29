@@ -5,6 +5,8 @@ import { buildDirectConversationId } from '../../utils/bucket.util';
 import { BadRequestError, ForbiddenError, NotFoundError } from '../../utils/errors.util';
 import { ConversationDoc, ParticipantInfo, InboxConversationEntry } from '../../types/chat.types';
 import { logger } from '../../logger/logger';
+import { publishToCentrifugo } from '../../config/centrifugo.config';
+import { buildConversationChannel } from '../../utils/channel.util';
 
 export const createOrGetConversation = async (
   currentUserId: string,
@@ -141,6 +143,16 @@ export const markConversationAsRead = async (
     { _id: userId },
     { $set: { [`conversations.${conversationId}.unread_count`]: 0 } },
   );
+
+  // The frontend only calls this when a conversation is actually open and
+  // its newest message is visible — so this is exactly the "the other
+  // person has seen this" signal, with no extra infrastructure needed.
+  // Broadcast on the conversation channel both participants are already
+  // subscribed to (no personal-channel involvement needed here).
+  await publishToCentrifugo({
+    channel: buildConversationChannel(conversationId),
+    data: { type: 'read_receipt', conversationId, userId, lastReadMessageId },
+  });
 
   logger.info('conversations.service.markConversationAsRead: exit', { conversationId, userId });
 };
