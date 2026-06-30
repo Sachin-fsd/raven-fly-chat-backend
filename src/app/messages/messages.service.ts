@@ -54,7 +54,7 @@ export const sendMessage = async (
   const isRecipientOnline = recipientId
   ? await isAnyoneSubscribedToChannel(buildPersonalChannel(recipientId))
   : false;
-  console.log('\n\n\n',{recipientId, isRecipientOnline},'\n\n\n')
+  // console.log('\n\n\n',{recipientId, isRecipientOnline},'\n\n\n')
 
   // Step 1: Real-time delivery via Centrifugo — happens instantly, independent
   // of whether the durable write below has completed.
@@ -120,7 +120,7 @@ export const sendMessage = async (
   });
 
   logger.info('messages.service.sendMessage: exit (queued for async persistence)', { conversationId, messageId });
-  console.log({text, isRecipientOnline})
+  // console.log({text, isRecipientOnline})
   return {
     conversationId,
     messageId,

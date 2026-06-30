@@ -67,7 +67,7 @@ export const isAnyoneSubscribedToChannel = async (channel: string): Promise<bool
     }
 
     const body = (await response.json()) as { result?: { num_clients?: number } };
-    console.log('\n\n\n',{body},'\n\n\n')
+    // console.log('\n\n\n',{body},'\n\n\n')
     return (body.result?.num_clients ?? 0) > 0;
   } catch (error) {
     logger.warn('Failed to check Centrifugo presence_stats, assuming offline', {

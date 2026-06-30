@@ -29,6 +29,6 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   logger.info('messages.controller.getMessages: entry', { conversationId });
 
   const messages = await getMessageHistory(conversationId, req.user!.userId, req.query as unknown as GetMessagesDto);
-  console.log({messages:messages.map(m=>[m.text, m.status])});
+  // console.log({messages:messages.map(m=>[m.text, m.status])});
   ApiSuccessResponse(res, HTTP_STATUS.OK, 'Message history fetched successfully', messages);
 });
