@@ -6,7 +6,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '../../utils/erro
 import { ConversationDoc, ParticipantInfo, InboxConversationEntry } from '../../types/chat.types';
 import { logger } from '../../logger/logger';
 import { publishToCentrifugo } from '../../config/centrifugo.config';
-import { buildConversationChannel } from '../../utils/channel.util';
+import { buildPersonalChannel } from '../../utils/channel.util';
 
 export const createOrGetConversation = async (
   currentUserId: string,
@@ -132,7 +132,7 @@ export const markConversationAsRead = async (
 ): Promise<void> => {
   logger.info('conversations.service.markConversationAsRead: entry', { conversationId, userId });
 
-  await getConversationById(conversationId, userId);
+  const conversation = await getConversationById(conversationId, userId);
 
   await getConversationsCollection().updateOne(
     { _id: conversationId },
@@ -147,12 +147,18 @@ export const markConversationAsRead = async (
   // The frontend only calls this when a conversation is actually open and
   // its newest message is visible — so this is exactly the "the other
   // person has seen this" signal, with no extra infrastructure needed.
-  // Broadcast on the conversation channel both participants are already
-  // subscribed to (no personal-channel involvement needed here).
-  await publishToCentrifugo({
-    channel: buildConversationChannel(conversationId),
-    data: { type: 'read_receipt', conversationId, userId, lastReadMessageId },
-  });
+  // Broadcast to each other participant's personal channel — there's no
+  // `conversation:<id>` channel/subscription involved anymore, so this is
+  // the only way for their sent-message ticks to flip to "read" live.
+  const otherParticipantIds = conversation.participants.filter((id) => id !== userId);
+  await Promise.all(
+    otherParticipantIds.map((participantId) =>
+      publishToCentrifugo({
+        channel: buildPersonalChannel(participantId),
+        data: { type: 'read_receipt', conversationId, userId, lastReadMessageId },
+      }),
+    ),
+  );
 
   logger.info('conversations.service.markConversationAsRead: exit', { conversationId, userId });
 };

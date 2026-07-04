@@ -7,7 +7,7 @@ import { env } from '../../config/env.config';
 import { logger } from '../../logger/logger';
 import { ChatMessageQueuePayload, MessageDoc } from '../../types/chat.types';
 import { GetMessagesDto } from './dto/get-messages.dto';
-import { buildConversationChannel, buildPersonalChannel } from '../../utils/channel.util';
+import { buildPersonalChannel } from '../../utils/channel.util';
 
 interface SendMessageResult {
   conversationId: string;
@@ -42,8 +42,6 @@ export const sendMessage = async (
   const bucket = getCurrentBucket(now);
   const messageId = now.getTime();
 
-  const channelName = buildConversationChannel(conversationId);
-  const senderName = conversation.participantsData[senderId]?.name ?? 'Someone';
   const otherParticipants = conversation.participants.filter((id) => id !== senderId);
 
   // MVP is 1:1 only, so there's exactly one "other" participant — that
@@ -55,48 +53,39 @@ export const sendMessage = async (
   ? await isAnyoneSubscribedToChannel(buildPersonalChannel(recipientId))
   : false;
   // console.log('\n\n\n',{recipientId, isRecipientOnline},'\n\n\n')
+  const status = isRecipientOnline ? 'delivered' : 'sent';
 
-  // Step 1: Real-time delivery via Centrifugo — happens instantly, independent
-  // of whether the durable write below has completed.
-  await publishToCentrifugo({
-    channel: channelName,
-    data: {
-      type: 'new_message',
-      conversationId,
-      messageId,
-      senderId,
-      text,
-      createdAt: now.toISOString(),
-      status: isRecipientOnline ? 'delivered' : 'sent',
-    },
-  });
-
-  // Step 1b: Also notify every *other* participant's personal channel.
-  // This is what makes the inbox update live for a brand-new conversation —
-  // the recipient is subscribed to their personal channel from the moment
-  // they connect, regardless of whether they're subscribed to this specific
-  // `conversation:<id>` channel yet (they only subscribe to those for
-  // conversations already in their inbox). Without this, a first message
-  // from a new contact would only ever show up after a manual refresh.
+  // Real-time delivery, fanned out once per participant over their own
+  // personal channel — no separate `conversation:<id>` channel involved.
+  // Every participant (sender included, for multi-device/tab sync) is
+  // subscribed to their personal channel for the whole session, so this
+  // single event both (a) delivers the full message to whoever has the
+  // chat open and (b) drives a live inbox update for everyone else,
+  // including a brand-new contact who has never opened this conversation
+  // before — no REST round-trip needed either way.
+  //
+  // `otherUserId`/`otherUserName` are computed per-recipient (each
+  // participant's "other side" is different) so the frontend can create a
+  // brand-new inbox row from this event alone if it doesn't have one yet.
   await Promise.all(
-    otherParticipants.map((participantId) =>
-      publishToCentrifugo({
+    conversation.participants.map((participantId) => {
+      const otherParticipantId = conversation.participants.find((id) => id !== participantId)!;
+      return publishToCentrifugo({
         channel: buildPersonalChannel(participantId),
         data: {
-          type: 'inbox_update',
+          type: 'new_message',
           conversationId,
-          lastMessage: text,
-          updatedAt: now.toISOString(),
+          messageId,
           senderId,
-          // Lets the frontend render a brand-new inbox row immediately,
-          // without waiting on a REST refetch to learn who the other
-          // participant is.
-          otherUserId: senderId,
-          otherUserName: senderName,
+          text,
+          createdAt: now.toISOString(),
+          status,
+          otherUserId: otherParticipantId,
+          otherUserName: conversation.participantsData[otherParticipantId]?.name ?? 'Someone',
           conversationType: conversation.type,
         },
-      }),
-    ),
+      });
+    }),
   );
 
   // Step 2: Queue the durable write + fan-out for the RabbitMQ worker.
@@ -110,7 +99,7 @@ export const sendMessage = async (
     participants: conversation.participants,
     participantsData: conversation.participantsData,
     conversationType: conversation.type,
-    status: isRecipientOnline ? 'delivered' : 'sent',
+    status,
   };
 
   const channel = getRabbitChannel();
@@ -120,7 +109,6 @@ export const sendMessage = async (
   });
 
   logger.info('messages.service.sendMessage: exit (queued for async persistence)', { conversationId, messageId });
-  // console.log({text, isRecipientOnline})
   return {
     conversationId,
     messageId,
@@ -128,7 +116,7 @@ export const sendMessage = async (
     text,
     senderId,
     createdAt: now.toISOString(),
-    status: isRecipientOnline ? 'delivered' : 'sent',
+    status,
   };
 };
 

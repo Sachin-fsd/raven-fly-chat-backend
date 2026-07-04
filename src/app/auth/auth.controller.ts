@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Request, Response, CookieOptions } from 'express';
 import { asyncHandler } from '../../utils/async-handler.util';
 import { ApiSuccessResponse } from '../../utils/api-response.util';
 import { HTTP_STATUS, COOKIE_NAMES } from '../../constants/app.constants';
@@ -9,10 +9,12 @@ import { UnauthorizedError } from '../../utils/errors.util';
 import { logger } from '../../logger/logger';
 import { env } from '../../config/env.config';
 
-const REFRESH_COOKIE_OPTIONS = {
+const isProduction = env.NODE_ENV === 'production';
+
+export const REFRESH_COOKIE_OPTIONS: CookieOptions = {
   httpOnly: true,
-  secure: env.NODE_ENV === 'production',
-  sameSite: 'none' as const,
+  secure: isProduction,
+  sameSite: isProduction ? 'none' : 'lax',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
