@@ -8,6 +8,7 @@ import { logger } from './logger/logger';
 import { globalRateLimiter } from './middlewares/rate-limiter.middleware';
 import { notFoundHandler, errorHandler } from './middlewares/error.middleware';
 import { ApiSuccessResponse } from './utils/api-response.util';
+import { getAstraDb, ASTRA_COLLECTIONS } from './config/astra.config';
 
 import authRoutes from './app/auth/auth.routes';
 import usersRoutes from './app/users/users.routes';
@@ -42,12 +43,14 @@ export const createApp = (): Application => {
   });
 
   app.get('/keepalive', async (_req: Request, res: Response) => {
-    const results: { backend: string; centrifugo: string; timestamp: string } = {
+    const results: { backend: string; centrifugo: string; astra: string; timestamp: string } = {
       backend: 'up',
       centrifugo: 'unknown',
+      astra: 'unknown',
       timestamp: new Date().toISOString(),
     };
 
+    // Check Centrifugo health
     try {
       const centrifugoHealthUrl = env.CENTRIFUGO_API_URL.replace('/api', '/health');
       const response = await fetch(centrifugoHealthUrl, {
@@ -59,6 +62,18 @@ export const createApp = (): Application => {
     } catch (error) {
       results.centrifugo = 'error';
       logger.warn('Centrifugo health check failed', { error: (error as Error).message });
+    }
+
+    // Check AstraDB health with lightweight query (findOne with limit 1)
+    try {
+      const db = getAstraDb();
+      const collection = db.collection(ASTRA_COLLECTIONS.MESSAGES);
+      // This is O(1) - just checks connection and fetches at most 1 document
+      await collection.findOne({});
+      results.astra = 'up';
+    } catch (error) {
+      results.astra = 'error';
+      logger.warn('AstraDB health check failed', { error: (error as Error).message });
     }
 
     ApiSuccessResponse(res, 200, 'Keepalive check completed', results);
