@@ -134,6 +134,10 @@ export const sendMessage = async (
  * request (it picks the top-N matching the sort criterion and stops,
  * rather than paginating further) — that's why MAX_PAGE_SIZE is 20, not
  * the 100 it used to allow.
+ *
+ * When no bucket is specified and no cursor is provided (initial load),
+ * this queries across multiple months starting from the current month and
+ * working backwards to fetch recent history across bucket boundaries.
  */
 export const getMessageHistory = async (
   conversationId: string,
@@ -144,19 +148,62 @@ export const getMessageHistory = async (
 
   await getConversationById(conversationId, requestingUserId);
 
-  const bucket = dto.bucket ?? getCurrentBucket();
+  // If a specific bucket is provided (pagination within a known bucket),
+  // use it directly
+  if (dto.bucket) {
+    const filter: Record<string, unknown> = { conversation_id: conversationId, bucket: dto.bucket };
+    if (dto.cursor) {
+      filter.message_id = { $lt: dto.cursor };
+    }
 
-  const filter: Record<string, unknown> = { conversation_id: conversationId, bucket };
-  if (dto.cursor) {
-    filter.message_id = { $lt: dto.cursor };
+    const cursor = getMessagesCollection()
+      .find(filter)
+      .sort({ message_id: -1 })
+      .limit(dto.limit);
+    const results = await cursor.toArray();
+
+    logger.info('messages.service.getMessageHistory: exit (single bucket)', { conversationId, bucket: dto.bucket, count: results.length });
+    return results;
   }
 
-  const cursor = getMessagesCollection()
-    .find(filter)
-    .sort({ message_id: -1 })
-    .limit(dto.limit);
-  const results = await cursor.toArray();
+  // Initial load without bucket: fetch across multiple months to get recent history
+  // Start from current month and work backwards up to 6 months
+  const results: MessageDoc[] = [];
+  const currentDate = new Date();
+  let remaining = dto.limit;
 
-  logger.info('messages.service.getMessageHistory: exit', { conversationId, count: results.length });
+  for (let monthsBack = 0; monthsBack <= 6 && remaining > 0; monthsBack++) {
+    const queryDate = new Date(currentDate);
+    queryDate.setMonth(currentDate.getMonth() - monthsBack);
+    const bucket = getCurrentBucket(queryDate);
+
+    const filter: Record<string, unknown> = { conversation_id: conversationId, bucket };
+    if (dto.cursor && monthsBack === 0) {
+      filter.message_id = { $lt: dto.cursor };
+    }
+
+    const cursor = getMessagesCollection()
+      .find(filter)
+      .sort({ message_id: -1 })
+      .limit(remaining);
+
+    const bucketResults = await cursor.toArray();
+    results.push(...bucketResults);
+    remaining -= bucketResults.length;
+
+    // If we got fewer results than requested from this bucket, continue to older buckets
+    if (bucketResults.length < remaining && bucketResults.length > 0) {
+      continue;
+    }
+    // If this bucket had results and we got enough, stop
+    if (bucketResults.length > 0 && remaining <= 0) {
+      break;
+    }
+  }
+
+  // Sort combined results by message_id descending
+  results.sort((a, b) => b.message_id - a.message_id);
+
+  logger.info('messages.service.getMessageHistory: exit (multi-bucket)', { conversationId, count: results.length });
   return results;
 };
