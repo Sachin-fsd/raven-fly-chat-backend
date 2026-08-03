@@ -41,6 +41,29 @@ export const createApp = (): Application => {
     });
   });
 
+  app.get('/keepalive', async (_req: Request, res: Response) => {
+    const results: { backend: string; centrifugo: string; timestamp: string } = {
+      backend: 'up',
+      centrifugo: 'unknown',
+      timestamp: new Date().toISOString(),
+    };
+
+    try {
+      const centrifugoHealthUrl = env.CENTRIFUGO_API_URL.replace('/api', '/health');
+      const response = await fetch(centrifugoHealthUrl, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000),
+      });
+
+      results.centrifugo = response.ok ? 'up' : 'down';
+    } catch (error) {
+      results.centrifugo = 'error';
+      logger.warn('Centrifugo health check failed', { error: (error as Error).message });
+    }
+
+    ApiSuccessResponse(res, 200, 'Keepalive check completed', results);
+  });
+
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/users', usersRoutes);
   app.use('/api/v1/conversations', conversationsRoutes);
