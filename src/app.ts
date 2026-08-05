@@ -76,7 +76,7 @@ export const createApp = (): Application => {
       logger.warn('AstraDB health check failed', { error: (error as Error).message });
     }
 
-    ApiSuccessResponse(res, 200, 'ok', results);
+    ApiSuccessResponse(res, 200, 'ok', {centrifugo: results.centrifugo, astra: results.astra});
   });
 
   app.use('/api/v1/auth', authRoutes);
